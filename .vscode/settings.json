@@ -1,0 +1,9 @@
+{
+  "java.project.sourcePaths": ["src"],
+  "java.project.outputPath": "bin",
+  "java.project.referencedLibraries": [
+    "lib/**/*.jar",
+    "/Users/dav/Downloads/jackson-core-2.16.0.jar",
+    "/Users/dav/Downloads/jackson-annotations-2.16.0.jar"
+  ]
+}
