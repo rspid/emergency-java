@@ -1,9 +1,5 @@
 package models;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -12,11 +8,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 public class EmergencyManager extends Thread {
     private static final String EVENT_API_URL = "http://localhost:3000/api/event";
     private static final String VEHICLE_API_URL = "http://localhost:3000/api/vehicle/free";
-    private static final String SENSORS_API_URL = "http://localhost:3000/api/sensor/active" ;
+    private static final String VEHICLE_ASSIGN_TO_EVENT_API_URL = "http://localhost:3000/api/vehicle/event";
+    private static final String SENSOR_NO_EVENT_API_URL = "http://localhost:3000/api/sensor/noevent" ;
+    private static final String SENSOR_ALL_API_URL = "http://localhost:3000/api/sensor/all" ;
+    private static final double TOLERANCE = 0.00000000000001;
+
+    private ApiClient apiClient;
+
 
     private List<Vehicle> realAvailableVehicles = Collections.synchronizedList(new ArrayList<>());
     // private Set<Long> processingEvents = Collections.synchronizedSet(new HashSet<>());
@@ -25,6 +28,10 @@ public class EmergencyManager extends Thread {
     
     private Semaphore realAvailableVehiclesSemaphore = new Semaphore(1);
     private Semaphore assignedVehiclesSemaphore = new Semaphore(1);
+
+    public EmergencyManager() {
+        this.apiClient = new ApiClient();
+    }
 
     public void run() {
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
@@ -36,11 +43,13 @@ public class EmergencyManager extends Thread {
     public void performTask() {
         while (true) {
             System.out.println("EmergencyManager is running");
-            // List<Event> events = fetchData(EVENT_API_URL, Event[].class);
-            List<Sensor> sensors = fetchData(SENSORS_API_URL, Sensor[].class);
-            List<Vehicle> currentAvailableVehicles = fetchData(VEHICLE_API_URL, Vehicle[].class);
-
-            // Utiliser synchronized pour garantir un accès sûr à la liste
+            
+            List<Sensor> allSensors = apiClient.getList(SENSOR_ALL_API_URL, Sensor[].class);
+            List<Sensor> sensors = apiClient.getList(SENSOR_NO_EVENT_API_URL, Sensor[].class);
+            List<Vehicle> currentAvailableVehicles = apiClient.getList(VEHICLE_API_URL, Vehicle[].class);
+    
+            ObjectMapper objectMapper = new ObjectMapper();
+    
             try {
                 realAvailableVehiclesSemaphore.acquire();
                 realAvailableVehicles.clear();
@@ -50,71 +59,92 @@ public class EmergencyManager extends Thread {
             } finally {
                 realAvailableVehiclesSemaphore.release();
             }
+    
+            System.out.println("Nombre de véhicules disponibles : " + realAvailableVehicles.size());
+            System.out.println("Nombre de capteurs : " + sensors.size());
+    
             for (Sensor sensor : sensors) {
-                //a coder
-                //chercher si le sensor à un voisin ou non avec une intensité supérieur à l'intensité du capteur
-                //si oui on ajoute le sensor à la liste des sensors de l'event
-                //si non on continue et on crée un nouvel event
-                if (!processingEvents.contains(event.getId())) {
-                    // Marquer l'intervention comme étant en cours de traitement
-                    processingEvents.add(sensor.getId());
-                    System.out.println("Traitement de l'événement " + event.getId());
-
-                    Thread eventThread = new Thread(() -> {
-                        handleEvent(event);
-                        System.out.println("Fin du thread");
-                        processingEvents.remove(event.getId());
-                    });
-                    eventThread.start();
+                if (hasNeighborWithHigherIntensity(sensor, allSensors)) {
+                    System.out.println("Capteur " + sensor.getId() + " a un voisin avec une intensité plus élevée");
+                    Event event = apiClient.getSingle("http://localhost:3000/api/sensor?id=" + sensor.getId(), Event.class);
+                    
+                    if (!processingEvents.contains(event.getId())) {
+                        processingEvents.add(sensor.getId());
+    
+                        Thread eventThread = new Thread(() -> {
+                            handleEvent(event);
+                            System.out.println("Fin du thread");
+                            processingEvents.remove(event.getId());
+                        });
+                        eventThread.start();
+                    }
+                } else {
+                    // Créer un nouvel événement
+                    ObjectNode json = objectMapper.createObjectNode();
+                    json.put("sensor", sensor.getId());
+                    Event event = apiClient.postOrPut(EVENT_API_URL, json, Event.class);
+    
+                    if (!processingEvents.contains(event.getId())) {
+                        processingEvents.add(sensor.getId());
+    
+                        Thread eventThread = new Thread(() -> {
+                            handleEvent(event);
+                            System.out.println("Fin du thread");
+                            processingEvents.remove(event.getId());
+                        });
+                        eventThread.start();
+                    }
                 }
             }
-
+    
             try {
-                Thread.sleep(10000); // Attendre 10 secondes (ajustez selon vos besoins)
+                Thread.sleep(10000); 
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
         }
     }
+    
+    private boolean hasNeighborWithHigherIntensity(Sensor referenceSensor, List<Sensor> sensors) {
+        Sensor maxIntensityNeighbor = findNeighborSensorWithMaxIntensity(referenceSensor, sensors);
+        return maxIntensityNeighbor != null && maxIntensityNeighbor.getIntensity() > referenceSensor.getIntensity();
+    }
+    
 
     private void handleEvent(Event event) {
-        System.out.println("Nouveau thread");
+        System.out.println("Nouveau thread, traitement de l'événement:" + event.getId());
         try {
             int vehicleToAssign = shouldAssignMultipleVehicles(event) ? 2 : 1;
     
             List<Vehicle> unassignedVehicles = new ArrayList<>();
+            System.out.println("Nombre de véhicules à assigner : " + vehicleToAssign);
     
             for (int i = 0; i < vehicleToAssign; i++) {
                 boolean isUnassignedVehiclesEmpty = true;
     
                 while (isUnassignedVehiclesEmpty) {
-                    assignedVehiclesSemaphore.acquire(); // Acquérir le sémaphore pour garantir un accès sûr à la liste
-                    realAvailableVehiclesSemaphore.acquire(); // Acquérir le sémaphore pour garantir un accès sûr à la liste
-                    // unassignedVehicles.clear();
-                    // unassignedVehicles.addAll(realAvailableVehicles);
-                    // unassignedVehicles.removeAll(assignedVehicles);
+                    realAvailableVehiclesSemaphore.acquire();
+                    assignedVehiclesSemaphore.acquire();
+    
                     unassignedVehicles = realAvailableVehicles.stream()
                         .filter(availableVehicle -> assignedVehicles.stream()
                                 .noneMatch(assignedVehicle -> assignedVehicle.getId() == availableVehicle.getId()))
                         .collect(Collectors.toList());
+    
                     if (!unassignedVehicles.isEmpty()) {
                         System.out.println("Fin du while ");
+    
+                        Vehicle nearestVehicle = calculateNearestVehicle(event, unassignedVehicles);
+    
+                        assignVehicleToEvent(event, nearestVehicle);
+                        assignedVehicles.add(nearestVehicle);
+    
                         isUnassignedVehiclesEmpty = false;
                     }
     
-                    realAvailableVehiclesSemaphore.release(); // Relâcher le sémaphore après avoir terminé l'accès à la liste
-                    assignedVehiclesSemaphore.release(); // Relâcher le sémaphore après avoir terminé l'accès à la liste
+                    assignedVehiclesSemaphore.release();
+                    realAvailableVehiclesSemaphore.release();
                     Thread.sleep(5000); // Attendre 5 secondes avant de vérifier à nouveau
-                }
-    
-                Vehicle nearestVehicle = calculateNearestVehicle(event, unassignedVehicles);
-    
-                assignedVehiclesSemaphore.acquire(); // Acquérir le sémaphore pour garantir un accès sûr à la liste
-                try {
-                    assignVehicleToEvent(event, nearestVehicle);
-                    assignedVehicles.add(nearestVehicle);
-                } finally {
-                    assignedVehiclesSemaphore.release(); // Relâcher le sémaphore après avoir terminé l'accès à la liste
                 }
             }
         } catch (InterruptedException e) {
@@ -122,118 +152,49 @@ public class EmergencyManager extends Thread {
         }
     }
     
-    
-    
 
-    private <T> List<T> fetchData(String apiUrl, Class<T[]> responseType) {
-        try {
-            URL url = new URL(apiUrl);
-            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            connection.setRequestMethod("GET");
-
-            BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-            StringBuilder response = new StringBuilder();
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                response.append(line);
-            }
-
-            reader.close();
-
-            String apiResponse = response.toString();
-            ObjectMapper mapper = new ObjectMapper();
-            // return List.of(mapper.readValue(apiResponse, responseType));
-            return Collections.synchronizedList(Arrays.asList(mapper.readValue(apiResponse, responseType)));
-        } catch (Exception e) {
-            e.printStackTrace();
-            return List.of();
-        }
-    }
-
-    private static Vehicle calculateNearestVehicle(Event event, List<Vehicle> availableVehicles) {
+    private  Vehicle calculateNearestVehicle(Event event, List<Vehicle> availableVehicles) {
         // a coder
         return availableVehicles.get(0);
     }
 
-    private static void assignVehicleToEvent(Event event, Vehicle vehicle) {
-        // a coder
-        System.out.println("Assignation du véhicule " + vehicle.getId() + " à l'événement " + event.getId());
+    private void assignVehicleToEvent(Event event, Vehicle vehicle) {
+        ObjectNode requestBody = new ObjectMapper().createObjectNode();
+        
+        ObjectNode vehicleNode = new ObjectMapper().createObjectNode();
+        vehicleNode.put("id", vehicle.getId());
+        vehicleNode.put("eventId", event.getId()); 
+
+        requestBody.set("vehicle", vehicleNode);
+
+        Vehicle updatedVehicule = apiClient.postOrPut(VEHICLE_ASSIGN_TO_EVENT_API_URL, requestBody, Vehicle.class);
+
+        System.out.println("Assignation du véhicule " + updatedVehicule.getId() + " à l'événement " + event.getId());
     }
 
     private boolean shouldAssignMultipleVehicles(Event event) {
         return event.getSensors().size() > 0 && event.getSensors().get(0).getSensor().getIntensity() >= 5;
     }
+
+    private Sensor findNeighborSensorWithMaxIntensity(Sensor referenceSensor, List<Sensor> sensors) {
+        Sensor maxIntensityNeighbor = null;
+        double maxIntensity = 0.0;
+    
+        for (Sensor sensor : sensors) {
+            if (sensor.getId() != referenceSensor.getId() && areSensorsAtSameLocation(referenceSensor, sensor)) {
+                if (sensor.getIntensity() > maxIntensity) {
+                    maxIntensityNeighbor = sensor;
+                    maxIntensity = sensor.getIntensity();
+                }
+            }
+        }
+    
+        return maxIntensityNeighbor;
+    }
+    
+    private boolean areSensorsAtSameLocation(Sensor sensor1, Sensor sensor2) {
+        return Math.abs(sensor1.getLatitude() - sensor2.getLatitude()) < TOLERANCE &&
+               Math.abs(sensor1.getLongitude() - sensor2.getLongitude()) < TOLERANCE;
+    }
+    
 }
-
-
-// public void run() {
-    //     while (true) {
-    //         System.out.println("EmergencyManager is running");
-    //         List<Event> events = fetchData(EVENT_API_URL, Event[].class);
-    //         List<Vehicle> currentAvailableVehicles = fetchData(VEHICLE_API_URL, Vehicle[].class);
-
-    //         // Utiliser synchronized pour garantir un accès sûr à la liste
-    //         try {
-    //             realAvailableVehiclesSemaphore.acquire();
-    //             realAvailableVehicles.clear();
-    //             realAvailableVehicles.addAll(currentAvailableVehicles);
-    //         } catch (InterruptedException e) {
-    //             e.printStackTrace();
-    //         } finally {
-    //             realAvailableVehiclesSemaphore.release();
-    //         }
-
-    //         for (Event event : events) {
-    //             System.out.println("Events en cours " + processingEvents);
-    //             if (!processingEvents.contains(event.getId())) {
-    //                 // Marquer l'intervention comme étant en cours de traitement
-    //                 processingEvents.add(event.getId());
-    //                 System.out.println("Traitement de l'événement " + event.getId());
-
-    //                 Thread eventThread = new Thread(() -> {
-    //                     handleEvent(event);
-                    
-    //                     // Retirer l'intervention de la liste des interventions en cours de traitement
-    //                     processingEvents.remove(event.getId());
-    //                 });
-    //                 eventThread.start();
-    //             }
-    //         }
-
-    //         try {
-    //             Thread.sleep(10000); // Attendre 10 secondes (ajustez selon vos besoins)
-    //         } catch (InterruptedException e) {
-    //             e.printStackTrace();
-    //         }
-    //     }
-    // }
-
-    // private void handleEvent(Event event) {
-    //     try {
-    //         realAvailableVehiclesSemaphore.acquire();
-    //         int vehicleToAssign = shouldAssignMultipleVehicles(event) ? 2 : 1;
-    //         Iterator<Vehicle> iterator = realAvailableVehicles.iterator();
-    //         System.out.println("nombre de véhicule à assigner" + vehicleToAssign);
-    //         assignedVehiclesSemaphore.acquire();
-    //         for (int i = 0; i < vehicleToAssign; i++) {
-    //             while (realAvailableVehicles.size() == 0 || assignedVehicles.containsAll(realAvailableVehicles)) {
-    //                 try {
-    //                     System.out.println("En attente de véhicules disponibles...");
-    //                     Thread.sleep(5000); // Attendre 5 secondes avant de vérifier à nouveau
-    //                 } catch (InterruptedException e) {
-    //                     e.printStackTrace();
-    //                 }
-    //             }
-
-    //             Vehicle nearestVehicle = calculateNearestVehicle(event, realAvailableVehicles);
-    //             assignVehicleToEvent(event, nearestVehicle);
-    //             assignedVehicles.add(nearestVehicle);
-    //         }
-    //     } catch (InterruptedException e) {
-    //         e.printStackTrace();
-    //     } finally {
-    //         realAvailableVehiclesSemaphore.release();
-    //         assignedVehiclesSemaphore.release();
-    //     }
-    // }
