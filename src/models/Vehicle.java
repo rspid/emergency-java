@@ -43,5 +43,14 @@ public class Vehicle {
     public long getId() {
         return id;
     }
+
+    //getlatitude
+    public double getLatitude() {
+        return latitude;
+    }
+    //getlongitude
+    public double getLongitude() {
+        return longitude;
+    }
    
 }

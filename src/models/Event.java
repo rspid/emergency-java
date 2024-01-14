@@ -57,4 +57,9 @@ public class Event {
         return this.sensors;
     }
 
+    //getFirstSensor
+    public EventSensor getFirstSensor() {
+        return this.sensors.get(0);
+    }
+
 }

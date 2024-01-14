@@ -39,10 +39,10 @@ public class ApiClient {
         }
     }
 
-    protected <T> T postOrPut(String apiUrl, Object requestBody, Class<T> responseType) {
+    protected <T> T postOrPut(String apiUrl, Object requestBody, Class<T> responseType,String method) {
         try {
             String requestBodyJson = convertObjectToJsonString(requestBody);
-            String apiResponse = fetchDataWithBody(apiUrl, "POST", requestBodyJson);
+            String apiResponse = fetchDataWithBody(apiUrl, method, requestBodyJson);
             ObjectMapper mapper = new ObjectMapper();
             return mapper.readValue(apiResponse, responseType);
         } catch (Exception e) {

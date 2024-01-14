@@ -16,6 +16,7 @@ public class EmergencyManager extends Thread {
     private static final String VEHICLE_ASSIGN_TO_EVENT_API_URL = "http://localhost:3000/api/vehicle/event";
     private static final String SENSOR_NO_EVENT_API_URL = "http://localhost:3000/api/sensor/noevent" ;
     private static final String SENSOR_ALL_API_URL = "http://localhost:3000/api/sensor/all" ;
+    private static final String SENSOR_ADD_TO_EVENT_API_URL = "http://localhost:3000/api/sensor/event";
     private static final double TOLERANCE = 0.00000000000001;
 
     private ApiClient apiClient;
@@ -66,23 +67,15 @@ public class EmergencyManager extends Thread {
             for (Sensor sensor : sensors) {
                 if (hasNeighborWithHigherIntensity(sensor, allSensors)) {
                     System.out.println("Capteur " + sensor.getId() + " a un voisin avec une intensité plus élevée");
-                    Event event = apiClient.getSingle("http://localhost:3000/api/sensor?id=" + sensor.getId(), Event.class);
-                    
-                    if (!processingEvents.contains(event.getId())) {
-                        processingEvents.add(sensor.getId());
-    
-                        Thread eventThread = new Thread(() -> {
-                            handleEvent(event);
-                            System.out.println("Fin du thread");
-                            processingEvents.remove(event.getId());
-                        });
-                        eventThread.start();
-                    }
+                    Sensor firstSensor = apiClient.getSingle("http://localhost:3000/api/sensor?id=" + sensor.getId(), Sensor.class);
+                    EventSensor eventSensor = firstSensor.getEvent();
+                    Event event = eventSensor.getEvent();
+                    addSensorToEvent(firstSensor, event);
                 } else {
                     // Créer un nouvel événement
                     ObjectNode json = objectMapper.createObjectNode();
                     json.put("sensor", sensor.getId());
-                    Event event = apiClient.postOrPut(EVENT_API_URL, json, Event.class);
+                    Event event = apiClient.postOrPut(EVENT_API_URL, json, Event.class,"POST");
     
                     if (!processingEvents.contains(event.getId())) {
                         processingEvents.add(sensor.getId());
@@ -153,9 +146,48 @@ public class EmergencyManager extends Thread {
     }
     
 
-    private  Vehicle calculateNearestVehicle(Event event, List<Vehicle> availableVehicles) {
-        // a coder
-        return availableVehicles.get(0);
+    private Vehicle calculateNearestVehicle(Event event, List<Vehicle> availableVehicles) {
+        EventSensor eventSensor = event.getFirstSensor();
+        Sensor sensor = eventSensor.getSensor();
+        
+        double eventLatitude = sensor.getLatitude();
+        double eventLongitude = sensor.getLongitude();
+    
+        Vehicle nearestVehicle = null;
+        double minDistance = Double.MAX_VALUE;
+    
+        for (Vehicle vehicle : availableVehicles) {
+            double vehicleLatitude = vehicle.getLatitude();
+            double vehicleLongitude = vehicle.getLongitude();
+    
+            // Calcul de la distance euclidienne entre le véhicule et l'événement
+            double distance = Math.sqrt(Math.pow(eventLatitude - vehicleLatitude, 2) + Math.pow(eventLongitude - vehicleLongitude, 2));
+    
+            // Mise à jour du véhicule le plus proche si la distance est plus petite
+            if (distance < minDistance) {
+                minDistance = distance;
+                nearestVehicle = vehicle;
+            }
+        }
+    
+        return nearestVehicle;
+    }
+    
+
+    private void addSensorToEvent(Sensor sensor, Event event) {
+        ObjectNode requestBody = new ObjectMapper().createObjectNode();
+    
+        ObjectNode sensorNode = new ObjectMapper().createObjectNode();
+        sensorNode.put("id", sensor.getId());
+        sensorNode.put("event_id", event.getId());
+    
+        requestBody.set("sensor", sensorNode);
+    
+        // Utilisez votre méthode apiClient.postOrPut avec la méthode HTTP appropriée (POST dans cet exemple)
+        // Assurez-vous de passer la bonne URL pour l'ajout du capteur à l'événement
+        Sensor updatedSensor = apiClient.postOrPut(SENSOR_ADD_TO_EVENT_API_URL, requestBody, Sensor.class, "PUT");
+    
+        System.out.println("Capteur " + updatedSensor.getId() + " ajouté à l'événement " + event.getId());
     }
 
     private void assignVehicleToEvent(Event event, Vehicle vehicle) {
@@ -167,7 +199,7 @@ public class EmergencyManager extends Thread {
 
         requestBody.set("vehicle", vehicleNode);
 
-        Vehicle updatedVehicule = apiClient.postOrPut(VEHICLE_ASSIGN_TO_EVENT_API_URL, requestBody, Vehicle.class);
+        Vehicle updatedVehicule = apiClient.postOrPut(VEHICLE_ASSIGN_TO_EVENT_API_URL, requestBody, Vehicle.class,"POST");
 
         System.out.println("Assignation du véhicule " + updatedVehicule.getId() + " à l'événement " + event.getId());
     }

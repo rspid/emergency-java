@@ -77,4 +77,8 @@ public class Sensor {
         double[] coordinates = {this.latitude, this.longitude};
         return coordinates;
     }
+    //get first event
+    public EventSensor getEvent() {
+        return this.events.get(0);
+    }
 }
