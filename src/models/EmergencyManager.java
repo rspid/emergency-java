@@ -96,7 +96,7 @@ public class EmergencyManager extends Thread {
                     Event event = apiClient.postOrPut(EVENT_API_URL, json, Event.class,"POST");
     
                     if (!processingEvents.contains(event.getId())) {
-                        processingEvents.add(sensor.getId());
+                        processingEvents.add(event.getId());
     
                         Thread eventThread = new Thread(() -> {
                             handleEvent(event);
