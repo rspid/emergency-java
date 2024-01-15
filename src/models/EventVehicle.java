@@ -18,18 +18,21 @@ public class EventVehicle {
     private Timestamp created_at;
     @JsonProperty("event")
     private Event event;
+    @JsonProperty("vehicle")
+    private Vehicle vehicle;
 
 
     public EventVehicle() {
     }
 
-    public EventVehicle(long id, long event_id, long vehicle_id, boolean on_site, Timestamp created_at, Event event) {
+    public EventVehicle(long id, long event_id, long vehicle_id, boolean on_site, Timestamp created_at, Event event, Vehicle vehicle) {
         this.id = id;
         this.event_id = event_id;
         this.vehicle_id = vehicle_id;
         this.on_site = on_site;
         this.created_at = created_at;
         this.event = event;
+        this.vehicle = vehicle;
     }
 
     

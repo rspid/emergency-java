@@ -16,17 +16,21 @@ public class Event {
     private Timestamp created_at;
     @JsonProperty("sensors")
     private List<EventSensor> sensors;
+    @JsonProperty("vehicles")
+    private List<EventVehicle> vehicles;
+
 
 
     // Constructeur par défaut nécessaire pour la désérialisation JSON
     public Event() {
     }
     // Constructeur
-    public Event(long id, boolean is_over, Timestamp created_at, List<EventSensor> sensors) {
+    public Event(long id, boolean is_over, Timestamp created_at, List<EventSensor> sensors, List<EventVehicle> vehicles) {
         this.id = id;
         this.is_over = is_over;
         this.created_at = created_at;
         this.sensors = sensors;
+        this.vehicles = vehicles;
     }
 
     // Getters et setters
@@ -60,6 +64,11 @@ public class Event {
     //getFirstSensor
     public EventSensor getFirstSensor() {
         return this.sensors.get(0);
+    }
+
+    //get number of vehicles
+    public int getNbVehicles() {
+        return this.vehicles.size();
     }
 
 }

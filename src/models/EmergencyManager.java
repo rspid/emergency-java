@@ -17,6 +17,8 @@ public class EmergencyManager extends Thread {
     private static final String SENSOR_NO_EVENT_API_URL = "http://localhost:3000/api/sensor/noevent" ;
     private static final String SENSOR_ALL_API_URL = "http://localhost:3000/api/sensor/all" ;
     private static final String SENSOR_ADD_TO_EVENT_API_URL = "http://localhost:3000/api/sensor/event";
+    private static final String EVENT_GIANT_API_URL = "http://localhost:3000/api/event/giant";
+
     private static final double TOLERANCE = 0.00000000000001;
 
     private ApiClient apiClient;
@@ -25,6 +27,7 @@ public class EmergencyManager extends Thread {
     private List<Vehicle> realAvailableVehicles = Collections.synchronizedList(new ArrayList<>());
     // private Set<Long> processingEvents = Collections.synchronizedSet(new HashSet<>());
     private List<Long> processingEvents = new ArrayList<>();
+    private List<Long> processingGiantEvents = new ArrayList<>();
     private List<Vehicle> assignedVehicles = Collections.synchronizedList(new ArrayList<>());
     
     private Semaphore realAvailableVehiclesSemaphore = new Semaphore(1);
@@ -36,8 +39,6 @@ public class EmergencyManager extends Thread {
 
     public void run() {
         ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-
-        // Planifier la tâche pour s'exécuter toutes les 10 secondes
         scheduler.scheduleAtFixedRate(this::performTask, 0, 10, TimeUnit.SECONDS);
     }
 
@@ -48,6 +49,7 @@ public class EmergencyManager extends Thread {
             List<Sensor> allSensors = apiClient.getList(SENSOR_ALL_API_URL, Sensor[].class);
             List<Sensor> sensors = apiClient.getList(SENSOR_NO_EVENT_API_URL, Sensor[].class);
             List<Vehicle> currentAvailableVehicles = apiClient.getList(VEHICLE_API_URL, Vehicle[].class);
+            List<Event> giantsEvents = apiClient.getList(EVENT_GIANT_API_URL, Event[].class);
     
             ObjectMapper objectMapper = new ObjectMapper();
     
@@ -63,7 +65,23 @@ public class EmergencyManager extends Thread {
     
             System.out.println("Nombre de véhicules disponibles : " + realAvailableVehicles.size());
             System.out.println("Nombre de capteurs : " + sensors.size());
-    
+            System.out.println("Nombre d'événements géants : " + giantsEvents.size());
+            
+            for (Event event : giantsEvents) {
+                if(event.getNbVehicles() == 1){
+                    if (!processingGiantEvents.contains(event.getId())) {
+                        processingGiantEvents.add(event.getId());
+        
+                        Thread eventThread = new Thread(() -> {
+                            handleExistingEvent(event);
+                            System.out.println("Fin du thread");
+                            processingGiantEvents.remove(event.getId());
+                        });
+                        eventThread.start();
+                    }
+                }
+                
+            }
             for (Sensor sensor : sensors) {
                 if (hasNeighborWithHigherIntensity(sensor, allSensors)) {
                     System.out.println("Capteur " + sensor.getId() + " a un voisin avec une intensité plus élevée");
@@ -108,6 +126,47 @@ public class EmergencyManager extends Thread {
         System.out.println("Nouveau thread, traitement de l'événement:" + event.getId());
         try {
             int vehicleToAssign = shouldAssignMultipleVehicles(event) ? 2 : 1;
+    
+            List<Vehicle> unassignedVehicles = new ArrayList<>();
+            System.out.println("Nombre de véhicules à assigner : " + vehicleToAssign);
+    
+            for (int i = 0; i < vehicleToAssign; i++) {
+                boolean isUnassignedVehiclesEmpty = true;
+    
+                while (isUnassignedVehiclesEmpty) {
+                    realAvailableVehiclesSemaphore.acquire();
+                    assignedVehiclesSemaphore.acquire();
+    
+                    unassignedVehicles = realAvailableVehicles.stream()
+                        .filter(availableVehicle -> assignedVehicles.stream()
+                                .noneMatch(assignedVehicle -> assignedVehicle.getId() == availableVehicle.getId()))
+                        .collect(Collectors.toList());
+    
+                    if (!unassignedVehicles.isEmpty()) {
+                        System.out.println("Fin du while ");
+    
+                        Vehicle nearestVehicle = calculateNearestVehicle(event, unassignedVehicles);
+    
+                        assignVehicleToEvent(event, nearestVehicle);
+                        assignedVehicles.add(nearestVehicle);
+    
+                        isUnassignedVehiclesEmpty = false;
+                    }
+    
+                    assignedVehiclesSemaphore.release();
+                    realAvailableVehiclesSemaphore.release();
+                    Thread.sleep(5000); // Attendre 5 secondes avant de vérifier à nouveau
+                }
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+    
+    private void handleExistingEvent(Event event) {
+        System.out.println("Nouveau thread, traitement de l'événement:" + event.getId());
+        try {
+            int vehicleToAssign = 1;
     
             List<Vehicle> unassignedVehicles = new ArrayList<>();
             System.out.println("Nombre de véhicules à assigner : " + vehicleToAssign);
